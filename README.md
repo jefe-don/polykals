@@ -26,6 +26,10 @@ python3 rapper_market_watch.py
 
 # Run forever, checking every CHECK_INTERVAL_SECS (default 3600)
 python3 rapper_market_watch.py --loop
+
+# Send a test alert through stdout + any configured push channels, then exit.
+# Use this to verify your NTFY_TOPIC / DISCORD_WEBHOOK_URL work.
+python3 rapper_market_watch.py --test-alert
 ```
 
 ### Environment variables (all optional)
@@ -135,3 +139,34 @@ tail -f /tmp/rapper_market_watch.log
 ```
 
 To stop: `launchctl unload ~/Library/LaunchAgents/com.user.rapper-market-watch.plist`
+
+### Option D — Windows
+
+**Quick way (foreground):** set your env vars and run loop mode in a Command
+Prompt:
+
+```bat
+set DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
+python3 rapper_market_watch.py --loop
+```
+
+> ⚠️ Windows consoles pause a running program while text is selected
+> (QuickEdit mode) — if you click inside the window, the watcher freezes,
+> including its hourly checks, until you press Enter/Esc. Disable it via
+> title bar right-click → Properties → uncheck **QuickEdit Mode**, or use
+> Task Scheduler below.
+
+**Proper way (Task Scheduler, hourly):** create `watch.bat` next to the
+script:
+
+```bat
+@echo off
+cd /d %~dp0
+set DISCORD_WEBHOOK_URL=https://discord.com/api/webhooks/YOUR_ID/YOUR_TOKEN
+python3 rapper_market_watch.py >> watch.log 2>&1
+```
+
+Then Task Scheduler → Create Basic Task → trigger **Daily**, then edit the
+trigger and enable *"Repeat task every 1 hour for a duration of 1 day"* →
+action: start `watch.bat`. In the task's properties, enable *"Run whether
+user is logged on or not"* so it survives logoffs and reboots.

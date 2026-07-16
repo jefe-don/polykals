@@ -393,6 +393,10 @@ def main() -> int:
         "--loop", action="store_true",
         help="run forever, checking every CHECK_INTERVAL_SECS (default 3600)",
     )
+    parser.add_argument(
+        "--test-alert", action="store_true",
+        help="send a test alert through stdout/ntfy/Discord and exit",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -402,6 +406,22 @@ def main() -> int:
     )
 
     state_path = os.environ.get("STATE_FILE", DEFAULT_STATE_FILE)
+
+    if args.test_alert:
+        channels = ["stdout"]
+        if os.environ.get("NTFY_TOPIC"):
+            channels.append("ntfy")
+        if os.environ.get("DISCORD_WEBHOOK_URL"):
+            channels.append("Discord")
+        print(f"Sending test alert via: {', '.join(channels)}")
+        if len(channels) == 1:
+            print("(set NTFY_TOPIC and/or DISCORD_WEBHOOK_URL to test push alerts)")
+        alert(Hit(
+            "Test", "test:alert",
+            "Test alert — rapper_market_watch is configured correctly",
+            "https://github.com/jefe-don/polykals", ["Kanye West"],
+        ))
+        return 0
 
     if not args.loop:
         run_check(state_path)
