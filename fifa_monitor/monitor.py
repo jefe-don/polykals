@@ -75,12 +75,8 @@ class Monitor:
                 products = await self._sitemap_products(result.text, proxy)
             else:
                 products = self._parse(ep, result.text)
-            for p in products:
-                if p.id:
-                    self.state.known_ids.add(p.id)
-                    self.state.availability[p.id] = p.any_available
-                if p.handle:
-                    self.state.known_handles.add(p.handle)
+            self._seed(products)
+            self.state.baselined_endpoints.add(ep["name"])
             log.info("Baseline %s: %d products.", ep["name"], len(products))
 
         self.state.initialized = True
@@ -128,6 +124,15 @@ class Monitor:
         return collected
 
     # -------------------------------------------------------------- detection
+    def _seed(self, products: list[Product]) -> None:
+        """Record products as known WITHOUT alerting (baseline seeding)."""
+        for p in products:
+            if p.id:
+                self.state.known_ids.add(p.id)
+                self.state.availability[p.id] = p.any_available
+            if p.handle:
+                self.state.known_handles.add(p.handle)
+
     def _dispatch(self, product: Product, alert_type: str, key: str) -> None:
         if self.state.already_sent(alert_type, key):
             return
@@ -222,12 +227,28 @@ class Monitor:
                 self.state.set_cache(name, result.etag, result.last_modified)
                 if ep.get("type") == "sitemap":
                     products = await self._sitemap_products(result.text, proxy)
-                    changed = self.process_sitemap(products)
                 else:
                     products = self._parse(ep, result.text)
-                    changed = self.process_products_json(products)
-                if changed:
+
+                if name not in self.state.baselined_endpoints:
+                    # First successful response for an endpoint that could not
+                    # be baselined at startup (e.g. it was blocked by 429/503).
+                    # Seed it silently so recovery never floods with "new"
+                    # alerts for the whole catalogue.
+                    self._seed(products)
+                    self.state.baselined_endpoints.add(name)
                     self.state.save()
+                    log.info(
+                        "[%s] late baseline seeded %d products (no alerts).",
+                        name, len(products),
+                    )
+                else:
+                    if ep.get("type") == "sitemap":
+                        changed = self.process_sitemap(products)
+                    else:
+                        changed = self.process_products_json(products)
+                    if changed:
+                        self.state.save()
 
             await self._sleep(self._interval_s(ep))
 

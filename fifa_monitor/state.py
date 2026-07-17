@@ -27,6 +27,8 @@ class State:
         self.availability: dict[int, bool] = {}
         # endpoint name -> {"etag": str, "last_modified": str}
         self.http_cache: dict[str, dict[str, str]] = {}
+        # endpoints whose baseline has been seeded (no alerts fired for them yet)
+        self.baselined_endpoints: set[str] = set()
         self.initialized: bool = False
 
     # ------------------------------------------------------------------ load
@@ -49,6 +51,7 @@ class State:
             int(k): bool(v) for k, v in data.get("availability", {}).items()
         }
         self.http_cache = data.get("http_cache", {})
+        self.baselined_endpoints = set(data.get("baselined_endpoints", []))
         self.initialized = bool(data.get("initialized", False))
         log.info(
             "Loaded state: %d known ids, %d handles, %d alert types.",
@@ -66,6 +69,7 @@ class State:
                 "sent_alerts": {k: sorted(v) for k, v in self.sent_alerts.items()},
                 "availability": {str(k): v for k, v in self.availability.items()},
                 "http_cache": self.http_cache,
+                "baselined_endpoints": sorted(self.baselined_endpoints),
                 "initialized": self.initialized,
             }
             self._atomic_write(data)
