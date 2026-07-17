@@ -23,7 +23,7 @@ import shutil
 import subprocess
 import sys
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 
 import requests
 
@@ -108,12 +108,12 @@ def print_discovery(markets: list[dict]) -> None:
 # Alert channels
 # ---------------------------------------------------------------------------
 
-def send_discord(text: str) -> bool:
+def send_discord(payload: dict) -> bool:
     url = CONFIG["DISCORD_WEBHOOK_URL"] or os.environ.get("DISCORD_WEBHOOK_URL", "")
     if not url:
         return False
     try:
-        requests.post(url, json={"content": text},
+        requests.post(url, json=payload,
                       timeout=CONFIG["REQUEST_TIMEOUT"]).raise_for_status()
         return True
     except requests.RequestException as exc:
@@ -163,7 +163,31 @@ def alert(name: str, ticker: str, bid, ask, last, delta: int) -> None:
     print("\n" + "=" * len(line))
     print(line)
     print("=" * len(line) + "\n")
-    if not send_discord(line):
+
+    def fmt(v) -> str:
+        return f"{v}¢" if v is not None else "—"
+
+    up = delta > 0
+    payload = {
+        "embeds": [{
+            "title": f"{'📈' if up else '📉'} {name}  {delta:+d}¢",
+            "url": f"https://kalshi.com/events/{CONFIG['EVENT_TICKER']}",
+            "color": 0x2ECC71 if up else 0xE74C3C,
+            "description": f"YES ask jumped **{fmt(ask - delta)} → {fmt(ask)}** "
+                           f"in one poll cycle"
+                           if up else
+                           f"YES ask dropped **{fmt(ask - delta)} → {fmt(ask)}** "
+                           f"in one poll cycle",
+            "fields": [
+                {"name": "YES ask", "value": fmt(ask), "inline": True},
+                {"name": "YES bid", "value": fmt(bid), "inline": True},
+                {"name": "Last trade", "value": fmt(last), "inline": True},
+            ],
+            "footer": {"text": ticker},
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }],
+    }
+    if not send_discord(payload):
         send_desktop(f"Kalshi move: {name} {delta:+d}¢",
                      f"bid {bid}¢ / ask {ask}¢ / last {last}¢")
         play_sound()
