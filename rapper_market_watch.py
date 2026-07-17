@@ -49,28 +49,42 @@ DEFAULT_STATE_FILE = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "seen_markets.json"
 )
 
-# Watchlist. Each entry is (display name, regex).
+# Watchlist. Each entry is (display name, regex, needs_music_context).
 #
 # Most names are case-insensitive word-boundary matches. "Future" and "Ye"
 # are deliberately CASE-SENSITIVE whole-word matches: a case-insensitive
 # match would fire on every market containing the ordinary words "future"
-# or "ye". (Title-cased "Future" can still false-positive occasionally;
-# that is the accepted trade-off.)
-ARTIST_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
-    ("Kanye West", re.compile(r"\bkanye\b", re.IGNORECASE)),
-    ("Kanye West", re.compile(r"\byeezy\b", re.IGNORECASE)),
-    ("Kanye West", re.compile(r"\bYe\b")),                     # case-sensitive
-    ("Travis Scott", re.compile(r"\btravis\s+scott\b", re.IGNORECASE)),
-    ("Young Thug", re.compile(r"\byoung\s+thug\b", re.IGNORECASE)),
-    ("Young Thug", re.compile(r"\bthugger\b", re.IGNORECASE)),
-    ("Future", re.compile(r"\bFuture\b")),                     # case-sensitive
-    ("Future", re.compile(r"\bfuture\s+hendrix\b", re.IGNORECASE)),
-    ("Lil Wayne", re.compile(r"\blil'?\s+wayne\b", re.IGNORECASE)),
-    ("Lil Wayne", re.compile(r"\bweezy\b", re.IGNORECASE)),
-    ("Lil Baby", re.compile(r"\blil'?\s+baby\b", re.IGNORECASE)),
-    ("Playboi Carti", re.compile(r"\bplayboi\s+carti\b", re.IGNORECASE)),
-    ("Playboi Carti", re.compile(r"\bcarti\b", re.IGNORECASE)),
+# or "ye". A bare "Future" additionally requires music context in the same
+# text, because title-cased prose ("Building the Future of Finance") still
+# passes the case-sensitive test. The known trade-off: a Future market with
+# no music-related wording at all (e.g. a pure legal question) is missed.
+ARTIST_PATTERNS: list[tuple[str, re.Pattern[str], bool]] = [
+    ("Kanye West", re.compile(r"\bkanye\b", re.IGNORECASE), False),
+    ("Kanye West", re.compile(r"\byeezy\b", re.IGNORECASE), False),
+    ("Kanye West", re.compile(r"\bYe\b"), False),                     # case-sensitive
+    ("Travis Scott", re.compile(r"\btravis\s+scott\b", re.IGNORECASE), False),
+    ("Young Thug", re.compile(r"\byoung\s+thug\b", re.IGNORECASE), False),
+    ("Young Thug", re.compile(r"\bthugger\b", re.IGNORECASE), False),
+    ("Future", re.compile(r"\bFuture\b"), True),                      # case-sensitive
+    ("Future", re.compile(r"\bfuture\s+hendrix\b", re.IGNORECASE), False),
+    ("Lil Wayne", re.compile(r"\blil'?\s+wayne\b", re.IGNORECASE), False),
+    ("Lil Wayne", re.compile(r"\bweezy\b", re.IGNORECASE), False),
+    ("Lil Baby", re.compile(r"\blil'?\s+baby\b", re.IGNORECASE), False),
+    ("Playboi Carti", re.compile(r"\bplayboi\s+carti\b", re.IGNORECASE), False),
+    ("Playboi Carti", re.compile(r"\bcarti\b", re.IGNORECASE), False),
 ]
+
+MUSIC_CONTEXT = re.compile(
+    r"\b(album|song|single|mixtape|rap|rapper|hip[- ]?hop|billboard|"
+    r"hot\s*100|charts?|tour|concert|festival|coachella|rolling\s+loud|"
+    r"grammys?|spotify|apple\s+music|itunes|track|feat\.?|featuring|"
+    r"artist|music|stream(?:s|ing)?|debut|discography|collab(?:oration)?|"
+    r"drops?|release)\b",
+    re.IGNORECASE,
+)
+# Artist-credit phrasings that identify Future the rapper directly,
+# e.g. Kalshi's ":: Future" subtitle or "by Future".
+FUTURE_CREDIT = re.compile(r"(?:\bby|::|\bft\.?|\bfeat\.?|\bfeaturing)\s+Future\b")
 
 log = logging.getLogger("rapper_market_watch")
 
@@ -85,9 +99,12 @@ def find_artists(*texts: str | None) -> list[str]:
     if not blob:
         return []
     found: list[str] = []
-    for name, pattern in ARTIST_PATTERNS:
-        if name not in found and pattern.search(blob):
-            found.append(name)
+    for name, pattern, needs_context in ARTIST_PATTERNS:
+        if name in found or not pattern.search(blob):
+            continue
+        if needs_context and not (MUSIC_CONTEXT.search(blob) or FUTURE_CREDIT.search(blob)):
+            continue
+        found.append(name)
     return found
 
 
@@ -407,15 +424,17 @@ def main() -> int:
 
     state_path = os.environ.get("STATE_FILE", DEFAULT_STATE_FILE)
 
+    channels = ["stdout"]
+    if os.environ.get("NTFY_TOPIC"):
+        channels.append("ntfy")
+    if os.environ.get("DISCORD_WEBHOOK_URL"):
+        channels.append("Discord")
+    print(f"Alert channels: {', '.join(channels)}")
+    if len(channels) == 1:
+        print("(no NTFY_TOPIC or DISCORD_WEBHOOK_URL set — push alerts are OFF)")
+
     if args.test_alert:
-        channels = ["stdout"]
-        if os.environ.get("NTFY_TOPIC"):
-            channels.append("ntfy")
-        if os.environ.get("DISCORD_WEBHOOK_URL"):
-            channels.append("Discord")
-        print(f"Sending test alert via: {', '.join(channels)}")
-        if len(channels) == 1:
-            print("(set NTFY_TOPIC and/or DISCORD_WEBHOOK_URL to test push alerts)")
+        print("Sending test alert...")
         alert(Hit(
             "Test", "test:alert",
             "Test alert — rapper_market_watch is configured correctly",
