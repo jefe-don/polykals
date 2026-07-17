@@ -96,7 +96,9 @@ class DiscordNotifier:
         return payload
 
     # ---------------------------------------------------------- dispatch
-    async def _post(self, webhook_url: str, payload: dict[str, Any]) -> None:
+    async def _post(
+        self, webhook_url: str, payload: dict[str, Any], label: str = "message"
+    ) -> None:
         try:
             resp = await self._client.post(webhook_url, json=payload)
             if resp.status_code == 429:
@@ -105,17 +107,20 @@ class DiscordNotifier:
                     retry = float(resp.json().get("retry_after", 1.0))
                 except Exception:  # noqa: BLE001
                     pass
-                log.warning("Discord rate limited; retrying in %.1fs.", retry)
+                log.warning("Discord rate limited (%s); retrying in %.1fs.", label, retry)
                 await asyncio.sleep(retry)
                 resp = await self._client.post(webhook_url, json=payload)
             if resp.status_code >= 300:
                 log.error(
-                    "Discord webhook returned %s: %s",
-                    resp.status_code,
-                    resp.text[:300],
+                    "Discord %s NOT delivered — HTTP %s: %s "
+                    "(is the webhook URL still valid? rotating it invalidates a "
+                    "running monitor until you restart it)",
+                    label, resp.status_code, resp.text[:200],
                 )
+            else:
+                log.info("Discord %s delivered (HTTP %s).", label, resp.status_code)
         except httpx.HTTPError as exc:
-            log.error("Failed to post to Discord: %s", exc)
+            log.error("Discord %s failed to post: %s", label, exc)
 
     def send_alert(self, product: Product, alert_type: str) -> None:
         """Fire-and-forget: schedule the webhook post without blocking polling."""
@@ -123,8 +128,31 @@ class DiscordNotifier:
             log.error("No DISCORD_WEBHOOK_URL configured; cannot send alert.")
             return
         payload = self._payload(product, alert_type)
-        self._spawn(self._post(self.webhook_url, payload))
+        self._spawn(
+            self._post(self.webhook_url, payload, f"{alert_type} alert '{product.title}'")
+        )
         log.info("Queued %s alert for %r (id=%s).", alert_type, product.title, product.id)
+
+    def send_startup(self, known: int, proxies: int) -> None:
+        """Post a launch confirmation so a broken webhook is obvious immediately."""
+        if not self.webhook_url:
+            log.error("No DISCORD_WEBHOOK_URL configured; cannot send startup ping.")
+            return
+        embed = {
+            "title": "✅ FIFA Monitor started",
+            "color": 0x2ECC71,
+            "description": "Now watching for new/restocked products.",
+            "fields": [
+                {"name": "Known products", "value": str(known), "inline": True},
+                {
+                    "name": "Proxies",
+                    "value": str(proxies) if proxies else "direct",
+                    "inline": True,
+                },
+            ],
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        self._spawn(self._post(self.webhook_url, {"embeds": [embed]}, "startup ping"))
 
     def send_heartbeat(self, stats: dict[str, Any]) -> None:
         webhook = self.heartbeat_webhook_url or self.webhook_url
@@ -143,7 +171,7 @@ class DiscordNotifier:
             ],
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
-        self._spawn(self._post(webhook, {"embeds": [embed]}))
+        self._spawn(self._post(webhook, {"embeds": [embed]}, "heartbeat"))
 
     async def send_test(self) -> None:
         """Synchronously send a fake alert so formatting can be verified."""

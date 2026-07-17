@@ -294,6 +294,7 @@ class Monitor:
     async def run(self) -> None:
         self.state.load()
         await self.baseline()
+        self.discord.send_startup(len(self.state.known_ids), len(self.proxies.proxies))
         log.info("Starting monitor loops for %d endpoints.", len(self.cfg.endpoints))
         tasks = [
             asyncio.ensure_future(self._endpoint_loop(ep)) for ep in self.cfg.endpoints
