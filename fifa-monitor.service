@@ -1,0 +1,20 @@
+[Unit]
+Description=FIFA Store Shopify new-product monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Adjust User and paths to match your VPS setup.
+User=fifa
+WorkingDirectory=/opt/fifa-monitor
+EnvironmentFile=/opt/fifa-monitor/.env
+ExecStart=/opt/fifa-monitor/venv/bin/python -m fifa_monitor --config /opt/fifa-monitor/config.json
+Restart=always
+RestartSec=5
+# Give the process time to flush state.json on SIGINT/SIGTERM.
+KillSignal=SIGINT
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

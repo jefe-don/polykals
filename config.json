@@ -1,0 +1,38 @@
+{
+  "keywords": ["ring"],
+  "base_url": "https://store.fifa.com",
+  "default_interval_ms": 1500,
+  "jitter_pct": 0.30,
+  "request_timeout_s": 4.0,
+  "endpoints": [
+    {
+      "name": "collectibles",
+      "url": "https://store.fifa.com/collections/collectibles/products.json?limit=250",
+      "type": "products_json",
+      "interval_ms": 1500
+    },
+    {
+      "name": "all_products",
+      "url": "https://store.fifa.com/products.json?limit=250&order=created_at:desc",
+      "type": "products_json",
+      "interval_ms": 1500
+    },
+    {
+      "name": "sitemap",
+      "url": "https://store.fifa.com/sitemap.xml",
+      "type": "sitemap",
+      "interval_ms": 1500
+    }
+  ],
+  "mention": "@everyone",
+  "heartbeat_enabled": true,
+  "heartbeat_interval_s": 1800,
+  "proxy_bench_seconds": 300,
+  "proxy_fail_threshold": 3,
+  "backoff_base_s": 2.0,
+  "backoff_cap_s": 60.0,
+  "state_file": "state.json",
+  "proxies_file": "proxies.txt",
+  "log_file": "monitor.log",
+  "log_level": "INFO"
+}

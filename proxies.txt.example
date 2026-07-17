@@ -1,0 +1,11 @@
+# One proxy per line. Blank lines and lines starting with # are ignored.
+# Both of these formats are accepted and normalised:
+#   user:pass@ip:port
+#   ip:port:user:pass
+# Authless proxies are also fine:
+#   ip:port
+#
+# Example:
+# user123:secretpass@203.0.113.10:8080
+# 203.0.113.11:8080:user123:secretpass
+# 203.0.113.12:3128
