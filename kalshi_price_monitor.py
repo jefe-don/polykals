@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""kalshi_price_monitor.py — poll Kalshi YES prices for watched attendance markets.
+"""kalshi_price_monitor.py — alert on big YES-price moves in a Kalshi event.
 
-Watches the FIFA World Cup Final attendance event (KXWCATTEND-26JUL20) and
-alerts when a watched person's YES ask price crosses below their threshold,
-or moves 10+ cents in a single poll cycle. All watched markets are fetched in
-one request per cycle via the event_ticker query param.
+Polls every market under the FIFA World Cup Final attendance event
+(KXWCATTEND-26JUL20) in one request per cycle and alerts whenever any
+market's YES ask moves 10+ cents in either direction between cycles.
 
 Usage:
-    python3 kalshi_price_monitor.py             # discover tickers, then loop
-    python3 kalshi_price_monitor.py --discover  # print markets + matches, exit
-    python3 kalshi_price_monitor.py --once      # discover + one poll cycle, exit
+    python3 kalshi_price_monitor.py             # discover markets, then loop
+    python3 kalshi_price_monitor.py --discover  # print event markets, exit
+    python3 kalshi_price_monitor.py --once      # discovery + one poll, exit
 
 Requires: Python 3.9+, requests. Optional: plyer (desktop notifications).
 """
@@ -18,14 +17,12 @@ from __future__ import annotations
 
 import argparse
 import csv
-import difflib
 import os
 import platform
 import shutil
 import subprocess
 import sys
 import time
-import unicodedata
 from datetime import datetime
 
 import requests
@@ -37,23 +34,9 @@ import requests
 CONFIG = {
     "EVENT_TICKER": "KXWCATTEND-26JUL20",
 
-    # People to watch → per-person THRESHOLD alert level in cents.
-    # Alert fires once when yes_ask drops below this; re-arms after yes_ask
-    # rises back above threshold + REARM_CENTS.
-    "WATCH": {
-        "Timothée Chalamet": 60,
-        "Victoria Beckham": 60,
-        "David Beckham": 60,
-        "Tom Cruise": 60,
-        "Tom Brady": 60,
-        "Travis Scott": 60,
-        "Drake": 60,
-    },
-    "REARM_CENTS": 3,           # hysteresis above threshold before re-arming
-
-    "MOVE_ALERT_CENTS": 10,     # single-cycle |Δ yes_ask| that triggers MOVEMENT
-    "MOVE_COOLDOWN_SECS": 120,  # min seconds between MOVEMENT alerts per market
-    "STALE_GAP_SECS": 120,      # skip MOVEMENT check if prior sample older than this
+    "MOVE_ALERT_CENTS": 10,     # single-cycle |Δ yes_ask| that triggers an alert
+    "MOVE_COOLDOWN_SECS": 120,  # min seconds between alerts per market
+    "STALE_GAP_SECS": 120,      # skip the check if the prior sample is older
 
     "POLL_SECS": 30,
     "REQUEST_TIMEOUT": 10,
@@ -69,7 +52,6 @@ CONFIG = {
 }
 
 API_URL = "https://api.elections.kalshi.com/trade-api/v2/markets"
-FUZZY_MIN_SCORE = 0.72  # minimum difflib ratio to accept a name↔market match
 
 
 # ---------------------------------------------------------------------------
@@ -110,76 +92,16 @@ def price_cents(market: dict, field: str) -> int | None:
     return None
 
 
-# ---------------------------------------------------------------------------
-# Ticker discovery / fuzzy matching
-# ---------------------------------------------------------------------------
-
-def _norm(text: str) -> str:
-    """Lowercase, accent-stripped form for fuzzy comparison."""
-    text = unicodedata.normalize("NFKD", text)
-    text = "".join(c for c in text if not unicodedata.combining(c))
-    return " ".join(text.casefold().split())
-
-
 def market_label(market: dict) -> str:
     """The person name Kalshi shows for this market (best available field)."""
     return (market.get("yes_sub_title") or market.get("subtitle")
             or market.get("title") or market.get("ticker") or "")
 
 
-def match_watchlist(markets: list[dict]) -> dict[str, dict]:
-    """Map each watched name to exactly one market, or die loudly.
-
-    Scores every (name, market) pair with difflib on normalized strings and
-    assigns greedily from the best score down, so near-collisions like
-    'Travis Scott' vs the event's 'Travis Kelce' market resolve to the
-    exact-match market first.
-    """
-    pairs = []  # (score, name, ticker)
-    by_ticker = {m["ticker"]: m for m in markets if m.get("ticker")}
-    for name in CONFIG["WATCH"]:
-        n = _norm(name)
-        for ticker, market in by_ticker.items():
-            label = _norm(market_label(market))
-            if not label:
-                continue
-            score = difflib.SequenceMatcher(None, n, label).ratio()
-            if n == label:
-                score = 1.0
-            elif n in label or label in n:
-                score = max(score, 0.9)
-            if score >= FUZZY_MIN_SCORE:
-                pairs.append((score, name, ticker))
-
-    matched: dict[str, dict] = {}
-    used_tickers: set[str] = set()
-    for score, name, ticker in sorted(pairs, key=lambda p: -p[0]):
-        if name in matched or ticker in used_tickers:
-            continue
-        matched[name] = by_ticker[ticker]
-        used_tickers.add(ticker)
-
-    unmatched = [n for n in CONFIG["WATCH"] if n not in matched]
-    if unmatched:
-        print("\nFATAL: could not match these watched names to a market:",
-              file=sys.stderr)
-        for name in unmatched:
-            print(f"  - {name}", file=sys.stderr)
-        print("\nAll available markets in this event:", file=sys.stderr)
-        for m in markets:
-            print(f"  {m.get('ticker', '?'):32s} {market_label(m)}",
-                  file=sys.stderr)
-        sys.exit(1)
-    return matched
-
-
-def print_discovery(markets: list[dict], matched: dict[str, dict]) -> None:
+def print_discovery(markets: list[dict]) -> None:
     print(f"\nEvent {CONFIG['EVENT_TICKER']}: {len(markets)} markets")
-    for m in markets:
+    for m in sorted(markets, key=market_label):
         print(f"  {m.get('ticker', '?'):32s} {market_label(m)}")
-    print("\nWatch list matches:")
-    for name, m in matched.items():
-        print(f"  {name:22s} → {m['ticker']:32s} ({market_label(m)})")
 
 
 # ---------------------------------------------------------------------------
@@ -234,18 +156,16 @@ def play_sound() -> None:
         pass
 
 
-def alert(kind: str, name: str, ticker: str, bid, ask, last,
-          delta: int | None = None) -> None:
+def alert(name: str, ticker: str, bid, ask, last, delta: int) -> None:
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    delta_txt = f"  Δ{delta:+d}¢" if delta is not None else ""
-    line = (f"🚨 [{kind}] {ts}  {name} ({ticker})  "
-            f"bid={bid}¢ ask={ask}¢ last={last}¢{delta_txt}")
+    line = (f"🚨 [MOVEMENT] {ts}  {name} ({ticker})  "
+            f"bid={bid}¢ ask={ask}¢ last={last}¢  Δ{delta:+d}¢")
     print("\n" + "=" * len(line))
     print(line)
     print("=" * len(line) + "\n")
     if not send_discord(line):
-        send_desktop(f"Kalshi {kind}: {name}",
-                     f"bid {bid}¢ / ask {ask}¢ / last {last}¢{delta_txt}")
+        send_desktop(f"Kalshi move: {name} {delta:+d}¢",
+                     f"bid {bid}¢ / ask {ask}¢ / last {last}¢")
         play_sound()
 
 
@@ -277,27 +197,23 @@ class MarketState:
     def __init__(self) -> None:
         self.prev_ask: int | None = None
         self.prev_time: float = 0.0
-        self.threshold_armed = True
         self.last_move_alert: float = 0.0
 
 
-def run_cycle(session: requests.Session, name_to_ticker: dict[str, str],
-              states: dict[str, MarketState]) -> None:
-    """One poll: fetch, evaluate alerts, log CSV, print status line."""
-    markets = {m["ticker"]: m for m in fetch_markets(session) if m.get("ticker")}
+def run_cycle(session: requests.Session, states: dict[str, MarketState]) -> None:
+    """One poll: fetch all event markets, check moves, log CSV, print status."""
+    markets = fetch_markets(session)
     now = time.time()
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     csv_rows = []
     status_bits = []
 
-    for name, ticker in name_to_ticker.items():
-        state = states[ticker]
-        market = markets.get(ticker)
-        if market is None:
-            print(f"    WARNING: {ticker} ({name}) missing from API response",
-                  file=sys.stderr)
-            status_bits.append(f"{name}: ?")
+    for market in sorted(markets, key=market_label):
+        ticker = market.get("ticker")
+        if not ticker:
             continue
+        name = market_label(market)
+        state = states.setdefault(ticker, MarketState())
 
         bid = price_cents(market, "yes_bid")
         ask = price_cents(market, "yes_ask")
@@ -309,21 +225,13 @@ def run_cycle(session: requests.Session, name_to_ticker: dict[str, str],
             continue
         status_bits.append(f"{name}: {ask}¢")
 
-        # THRESHOLD: fire once below threshold; re-arm above threshold + hysteresis
-        threshold = CONFIG["WATCH"][name]
-        if state.threshold_armed and ask < threshold:
-            alert("THRESHOLD", name, ticker, bid, ask, last)
-            state.threshold_armed = False
-        elif not state.threshold_armed and ask > threshold + CONFIG["REARM_CENTS"]:
-            state.threshold_armed = True
-
-        # MOVEMENT: single-cycle delta, skipping first sample and stale gaps
+        # Single-cycle delta, skipping the first sample and stale gaps
         if (state.prev_ask is not None
                 and now - state.prev_time <= CONFIG["STALE_GAP_SECS"]):
             delta = ask - state.prev_ask
             if (abs(delta) >= CONFIG["MOVE_ALERT_CENTS"]
                     and now - state.last_move_alert >= CONFIG["MOVE_COOLDOWN_SECS"]):
-                alert("MOVEMENT", name, ticker, bid, ask, last, delta=delta)
+                alert(name, ticker, bid, ask, last, delta)
                 state.last_move_alert = now
 
         state.prev_ask = ask
@@ -335,9 +243,9 @@ def run_cycle(session: requests.Session, name_to_ticker: dict[str, str],
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Monitor Kalshi YES prices for watched attendance markets.")
+        description="Alert on 10c+ YES-price moves in a Kalshi event's markets.")
     parser.add_argument("--discover", action="store_true",
-                        help="print all event markets + watch-list matches, then exit")
+                        help="print all event markets, then exit")
     parser.add_argument("--once", action="store_true",
                         help="run discovery plus one poll cycle, then exit")
     args = parser.parse_args()
@@ -351,26 +259,25 @@ def main() -> int:
         print(f"FATAL: initial market fetch failed: {exc}", file=sys.stderr)
         return 1
 
-    matched = match_watchlist(markets)  # exits loudly if any name unmatched
-    print_discovery(markets, matched)
+    print_discovery(markets)
     if args.discover:
         return 0
-
-    name_to_ticker = {name: m["ticker"] for name, m in matched.items()}
-    states = {ticker: MarketState() for ticker in name_to_ticker.values()}
 
     channel = ("Discord webhook"
                if (CONFIG["DISCORD_WEBHOOK_URL"]
                    or os.environ.get("DISCORD_WEBHOOK_URL"))
                else "desktop notification + sound")
     print(f"\nAlert channel: {channel}")
+    print(f"Alert on:      {CONFIG['MOVE_ALERT_CENTS']}¢+ single-cycle moves "
+          f"in yes_ask, either direction")
     print(f"CSV history:   {CONFIG['CSV_PATH']}")
     print(f"Polling every {CONFIG['POLL_SECS']}s. Ctrl-C to stop.\n")
 
+    states: dict[str, MarketState] = {}
     backoff_idx = 0
     while True:
         try:
-            run_cycle(session, name_to_ticker, states)
+            run_cycle(session, states)
             backoff_idx = 0
             if args.once:
                 return 0
