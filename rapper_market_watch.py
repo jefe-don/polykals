@@ -86,6 +86,22 @@ MUSIC_CONTEXT = re.compile(
 # e.g. Kalshi's ":: Future" subtitle or "by Future".
 FUTURE_CREDIT = re.compile(r"(?:\bby|::|\bft\.?|\bfeat\.?|\bfeaturing)\s+Future\b")
 
+
+def _build_exclude() -> re.Pattern[str]:
+    """Markets to ignore entirely, even when an artist matches.
+
+    Kalshi creates weekly Billboard chart events with one market per song,
+    which spams alerts every chart week. Add more comma-separated terms via
+    the EXCLUDE_KEYWORDS env var (matched case-insensitively, whole word).
+    """
+    words = ["billboard", r"hot\s*100"]
+    extra = os.environ.get("EXCLUDE_KEYWORDS", "")
+    words += [re.escape(w.strip()) for w in extra.split(",") if w.strip()]
+    return re.compile(r"\b(?:" + "|".join(words) + r")\b", re.IGNORECASE)
+
+
+EXCLUDE = _build_exclude()
+
 log = logging.getLogger("rapper_market_watch")
 
 
@@ -96,7 +112,7 @@ log = logging.getLogger("rapper_market_watch")
 def find_artists(*texts: str | None) -> list[str]:
     """Return the artists mentioned in any of the given text fields."""
     blob = " ".join(t for t in texts if t)
-    if not blob:
+    if not blob or EXCLUDE.search(blob):
         return []
     found: list[str] = []
     for name, pattern, needs_context in ARTIST_PATTERNS:

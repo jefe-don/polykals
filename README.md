@@ -11,7 +11,16 @@ currently live as a baseline (printed, but no push alerts).
 
 Matching notes: most names are case-insensitive whole-word matches, but
 **"Future"** and **"Ye"** are case-sensitive whole-word matches on purpose —
-otherwise every market containing "future" or "ye(s)" would fire.
+otherwise every market containing "future" or "ye(s)" would fire. A bare
+"Future" hit additionally requires music-related wording (album, tour,
+Grammy, "by Future", …) in the same text, so title-cased prose like
+"Building the Future of Finance" doesn't trigger.
+
+**Exclusions:** markets mentioning *Billboard* or *Hot 100* are ignored
+entirely — Kalshi creates a fresh weekly chart event with one market per
+song, which would spam alerts every chart week. Add your own comma-separated
+exclusion terms via the `EXCLUDE_KEYWORDS` env var (e.g.
+`set EXCLUDE_KEYWORDS=spotify,album equivalent units`).
 
 ## Requirements
 
